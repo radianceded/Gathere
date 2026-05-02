@@ -74,4 +74,4 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
-    st.caption("Gathere v0.2 | LLM + 高德地图 API")
+    st.caption("Gathere v0.3 | LLM + 高德地图 API")
