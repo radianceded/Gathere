@@ -33,7 +33,11 @@ SYSTEM_PROMPT = """你是 Gathere，一个多人聚会地点协商助手。你�
 3. **计算中心点**: 用 compute_centroid 找到大家位置的地理中心。
 4. **搜索候选地点**: 在中心点附近搜索用户想要的场所类型（默认餐厅）。
 5. **计算通勤成本**: 为每个候选地点，计算每个人到达的时间和距离。
+<<<<<<< HEAD
 6. **排序推荐**: 按照总通勤时间或最大通勤时间排序，给出 Top 3 推荐。
+=======
+6. 排序推荐: 按照总通勤时间或最大通勤时间排序，给出 Top 3 推荐。
+>>>>>>> 784ba4a (feat: add ranker for fair place recommendation)
 
 ## 交互风格
 - 用中文回复
@@ -44,7 +48,10 @@ SYSTEM_PROMPT = """你是 Gathere，一个多人聚会地点协商助手。你�
 
 ## 重要注意事项
 - 默认出行方式是公交（transit），除非用户指定
+<<<<<<< HEAD
 - 默认城市是苏州，除非用户指定其他城市
+=======
+>>>>>>> 784ba4a (feat: add ranker for fair place recommendation)
 - 搜索半径默认3km，如果结果太少可以扩大到5km
 - 推荐时要说明理由
 """
@@ -53,6 +60,7 @@ SYSTEM_PROMPT = """你是 Gathere，一个多人聚会地点协商助手。你�
 def run_agent_turn(conversation_history: list[dict]) -> tuple[str, list[dict]]:
     """
     执行一轮 Agent 交互（可能包含多次 tool calling）
+<<<<<<< HEAD
     
     参数:
         conversation_history: 对话历史
@@ -63,6 +71,14 @@ def run_agent_turn(conversation_history: list[dict]) -> tuple[str, list[dict]]:
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history
 
     while True:
+=======
+    """
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + conversation_history
+
+    max_steps = 10
+
+    for _ in range(max_steps):
+>>>>>>> 784ba4a (feat: add ranker for fair place recommendation)
         response = client.chat.completions.create(
             model=LLM_MODEL,
             messages=messages,
@@ -73,12 +89,19 @@ def run_agent_turn(conversation_history: list[dict]) -> tuple[str, list[dict]]:
         choice = response.choices[0]
         message = choice.message
 
+<<<<<<< HEAD
         # 将 assistant 消息加入历史
         # 构建可序列化的 assistant 消息
+=======
+>>>>>>> 784ba4a (feat: add ranker for fair place recommendation)
         assistant_msg = {
             "role": "assistant",
             "content": message.content or "",
         }
+<<<<<<< HEAD
+=======
+
+>>>>>>> 784ba4a (feat: add ranker for fair place recommendation)
         if message.tool_calls:
             assistant_msg["tool_calls"] = [
                 {
@@ -91,12 +114,22 @@ def run_agent_turn(conversation_history: list[dict]) -> tuple[str, list[dict]]:
                 }
                 for tc in message.tool_calls
             ]
+<<<<<<< HEAD
         messages.append(assistant_msg)
 
         # 如果有 tool calls，执行工具
         if message.tool_calls:
             for tool_call in message.tool_calls:
                 func_name = tool_call.function.name
+=======
+
+        messages.append(assistant_msg)
+
+        if message.tool_calls:
+            for tool_call in message.tool_calls:
+                func_name = tool_call.function.name
+
+>>>>>>> 784ba4a (feat: add ranker for fair place recommendation)
                 try:
                     func_args = json.loads(tool_call.function.arguments)
                 except json.JSONDecodeError:
@@ -110,7 +143,10 @@ def run_agent_turn(conversation_history: list[dict]) -> tuple[str, list[dict]]:
                 else:
                     result = {"error": f"未知工具: {func_name}"}
 
+<<<<<<< HEAD
                 # 工具结果作为 tool message 加入
+=======
+>>>>>>> 784ba4a (feat: add ranker for fair place recommendation)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
@@ -118,12 +154,22 @@ def run_agent_turn(conversation_history: list[dict]) -> tuple[str, list[dict]]:
                 })
 
         else:
+<<<<<<< HEAD
             # 没有 tool calls，Agent 完成回复
             final_text = message.content or ""
             # 从 messages 中去掉 system prompt，返回纯对话历史
             updated_history = [m for m in messages if m["role"] != "system"]
             return final_text, updated_history
 
+=======
+            final_text = message.content or ""
+            updated_history = [m for m in messages if m["role"] != "system"]
+            return final_text, updated_history
+
+    final_text = "这次推荐过程调用工具次数过多，已自动停止。请你补充更明确的位置或聚会类型后再试。"
+    updated_history = [m for m in messages if m["role"] != "system"]
+    return final_text, updated_history
+>>>>>>> 784ba4a (feat: add ranker for fair place recommendation)
 
 def chat(user_message: str, conversation_history: list[dict] = None) -> tuple[str, list[dict]]:
     """

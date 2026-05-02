@@ -14,7 +14,11 @@ st.set_page_config(
 )
 
 # 标题
+<<<<<<< HEAD
 st.title("📍 Gathere")
+=======
+st.title("📍 Gathere 📍")
+>>>>>>> 784ba4a (feat: add ranker for fair place recommendation)
 st.caption("多人聚会地点协商助手 — 告诉我每个人在哪，我帮你找最佳聚会地点")
 
 # 初始化 session state
@@ -74,4 +78,8 @@ with st.sidebar:
         st.rerun()
     
     st.markdown("---")
+<<<<<<< HEAD
     st.caption("Gathere v0.1 | Claude + 高德地图API")
+=======
+    st.caption("Gathere v0.2 | LLM + 高德地图API")
+>>>>>>> 784ba4a (feat: add ranker for fair place recommendation)
