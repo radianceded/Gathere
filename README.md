@@ -1,3 +1,4 @@
+````markdown
 # 📍 Gathere
 
 **多人聚会地点协商助手** — 基于 LLM + 高德地图 API 的智能 Agent
@@ -35,14 +36,14 @@ Gathere 帮你回答这些问题。告诉它每个人在哪，它会：
               │
         综合评分排序
         (ranker.py)
-```
+````
 
 ## 快速开始
 
 ### 1. 准备 API Key
 
-- **LLM API Key**：任意 OpenAI 兼容服务（DeepSeek / 通义千问 / 智谱 / Moonshot 等）
-- **高德地图 Key**：[高德开放平台](https://console.amap.com/dev/key/app)（选择 Web 服务）
+* **LLM API Key**：任意 OpenAI 兼容服务（DeepSeek / 通义千问 / 智谱 / Moonshot 等）
+* **高德地图 Key**：[高德开放平台](https://console.amap.com/dev/key/app)（选择 Web 服务）
 
 ### 2. 安装依赖
 
@@ -103,17 +104,29 @@ Gathere: [自动执行]
 
 ### v0.1：核心功能实现
 
-- 支持基于 LLM 的 Agent 对话
-- 支持地理编码、POI 搜索、路线规划和中心点计算
-- 支持根据多人位置推荐聚会地点
+* 支持基于 LLM 的 Agent 对话
+* 支持地理编码、POI 搜索、路线规划和中心点计算
+* 支持根据多人位置推荐聚会地点
 
 ### v0.2：增加二次排序
 
-- 新增 `ranker.py`
-- 不再只根据中心点距离推荐
-- 综合考虑平均通勤时间、最长单人通勤时间、公平性差值、距离中心点远近和 POI 评分
-- 推荐结果更偏向“多人协商公平性”
+* 新增 `ranker.py`
+* 不再只根据中心点距离推荐
+* 综合考虑平均通勤时间、最长单人通勤时间、公平性差值、距离中心点远近和 POI 评分
+* 推荐结果更偏向“多人协商公平性”
+
+### v0.3: 封装 Skill 与 FastAPI 接口
+
+* 新增 `Gathere Skill` 封装
+* 将地点检索、路线规划、二次排序流程整理为可复用能力
+* 新增 FastAPI 本地接口 `/recommend`
+* 支持通过 HTTP 请求传入多人位置、目标类型和推荐参数
+* 推荐结果以结构化 JSON 返回，便于网页端、QQ Bot 或其他 Agent 调用
+* 项目从本地脚本 Demo 进一步升级为“可集成的后端服务模块”
 
 ## License
 
 MIT
+
+```
+```
