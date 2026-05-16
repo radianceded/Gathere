@@ -33,6 +33,7 @@ Gathere 将 LLM Agent、地图工具调用、路线规划和公平性排序结�
 1. **Streamlit 聊天界面**：适合直接交互和演示
 2. **Gathere Skill**：适合被其他 Agent 或业务逻辑复用
 3. **FastAPI 接口**：适合作为后端服务，被网页端、QQ Bot、插件或其他系统调用
+4. **AstrBot 插件**：适合在 AstrBot Chat 中通过 `/gathere` 命令调用推荐服务
 
 ## 技术架构
 
@@ -69,7 +70,9 @@ Gathere/
 ├── app.py                  # Streamlit 聊天界面
 ├── agent.py                # Agent 主逻辑
 ├── ranker.py               # 二次排序与公平性评分
-├── gathere_skill.py        # Gathere Skill 封装
+├── skills/                 # Gathere Skill 封装
+├── integrations/           # 外部系统接入示例
+│   └── astrbot_plugin_gathere/
 ├── api.py                  # FastAPI 服务入口
 ├── requirements.txt        # 项目依赖
 ├── .env.example            # 环境变量示例
@@ -80,7 +83,8 @@ Gathere/
 
 - `agent.py` 负责理解用户输入，并调用地图相关工具
 - `ranker.py` 负责对候选地点进行综合排序
-- `gathere_skill.py` 将推荐能力封装为可复用 Skill
+- `skills/` 将推荐能力封装为可复用 Skill
+- `integrations/astrbot_plugin_gathere/` 提供 AstrBot 插件接入源码
 - `api.py` 将推荐能力暴露为 HTTP 接口
 - `app.py` 提供 Streamlit 可视化聊天入口
 
@@ -391,6 +395,34 @@ FastAPI 接口适合用于：
 - 接入 ChatGPT Actions
 - 部署到服务器后作为独立推荐服务使用
 
+## AstrBot 插件接入
+
+插件源码位置：
+
+```text
+integrations/astrbot_plugin_gathere
+```
+
+先启动 Gathere FastAPI：
+
+```bash
+python -m uvicorn api:app --host 127.0.0.1 --port 8000
+```
+
+将插件复制到 AstrBot 插件目录：
+
+```text
+astrbot-gathere/data/plugins/astrbot_plugin_gathere
+```
+
+然后在 AstrBot WebUI 中重载插件。
+
+测试命令：
+
+```text
+/gathere 我@苏州大学天赐庄校区；小王@园区湖东邻里中心；小李@新区狮山路 | 火锅 | 苏州
+```
+
 ## 推荐排序逻辑
 
 Gathere 的排序不是只看中心点距离，而是通过 `ranker.py` 对候选 POI 进行二次评分。
@@ -467,13 +499,16 @@ Gathere: 推荐 3 个相对公平的火锅聚餐地点：
 - 推荐结果以结构化 JSON 返回，便于网页端、QQ Bot 或其他 Agent 调用
 - 项目从本地脚本 Demo 进一步升级为可集成的后端服务模块
 
-## 后续计划
+### v1.0：接入 AstrBot 插件
 
-- 接入 QQ Bot / AstrBot，实现群聊内直接推荐聚会地点
-- 增加更多筛选条件，例如营业时间、人均价格、评分、是否有包间
-- 支持用户对推荐结果继续追问和调整
- 
-- 支持更多城市和更多出行方式
+- 新增 AstrBot 插件 `astrbot_plugin_gathere`
+- 支持在 AstrBot Chat 中通过 `/gathere` 命令调用 Gathere 推荐服务
+- 插件将聊天命令解析为 `/recommend` 接口所需的结构化 JSON
+- Gathere FastAPI 接收请求后，完成地理编码、中心点计算、POI 搜索、路线规划与 `ranker.py` 综合排序
+- 插件读取后端返回的 `places` 字段，并格式化输出 Top 3 推荐结果
+- 当前版本为命令式插件调用，后续可升级为 LLM Tool Calling 和 QQ 群聊入口
+
+
 
 ## License
 

@@ -1,0 +1,6 @@
+name: astrbot_plugin_gathere
+display_name: Gathere 聚会地点推荐
+desc: 调用 Gathere FastAPI，为 AstrBot 用户推荐公平聚会地点
+version: v0.1.0
+author: radianceded
+repo: https://github.com/radianceded/Gathere
