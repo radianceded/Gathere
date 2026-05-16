@@ -169,16 +169,17 @@ from gathere_skill import GathereSkill
 skill = GathereSkill()
 
 result = skill.recommend(
-    people=[
-        {"name": "我", "location": "苏大本部"},
-        {"name": "小王", "location": "园区湖东邻里中心"},
-        {"name": "小李", "location": "新区狮山路"},
-        {"name": "小张", "location": "吴中区宝带西路"},
+    participants=[
+        {"name": "我", "address": "苏大本部"},
+        {"name": "小王", "address": "园区湖东邻里中心"},
+        {"name": "小李", "address": "新区狮山路"},
+        {"name": "小张", "address": "吴中区宝带西路"},
     ],
-    target="火锅",
+    keywords="火锅",
     city="苏州",
+    mode="transit",
     top_k=3,
-    constraints=["人均100以内", "适合聚餐"]
+    strategy="balanced",
 )
 
 print(result)
@@ -188,23 +189,35 @@ print(result)
 
 ```python
 {
+    "participants": [
+        {
+            "name": "我",
+            "address": "苏大本部",
+            "location": "120.63,31.30"
+        }
+    ],
     "center": {
         "lng": 120.62,
         "lat": 31.30
     },
-    "recommendations": [
+    "center_location": "120.62,31.30",
+    "candidate_count": 20,
+    "places": [
         {
             "name": "示例火锅店",
             "address": "苏州市某某路",
+            "location": "120.61,31.29",
+            "rating": "4.7",
             "score": 87.5,
-            "avg_duration": 28,
-            "max_duration": 42,
-            "fairness_gap": 18,
+            "total_duration_min": 95,
+            "max_duration_min": 42,
+            "fairness_gap_min": 18,
+            "center_distance_m": 820,
             "routes": [
                 {
-                    "person": "我",
-                    "duration": 25,
-                    "distance": 6200
+                    "participant": "我",
+                    "duration_min": 25,
+                    "distance_km": 6.2
                 }
             ]
         }
@@ -254,31 +267,25 @@ POST /recommend
 
 ```json
 {
-  "people": [
+  "participants": [
     {
       "name": "我",
-      "location": "苏大本部"
+      "address": "苏州大学天赐庄校区"
     },
     {
       "name": "小王",
-      "location": "园区湖东邻里中心"
+      "address": "园区湖东邻里中心"
     },
     {
       "name": "小李",
-      "location": "新区狮山路"
-    },
-    {
-      "name": "小张",
-      "location": "吴中区宝带西路"
+      "address": "新区狮山路"
     }
   ],
-  "target": "火锅",
+  "keywords": "火锅",
   "city": "苏州",
+  "mode": "transit",
   "top_k": 3,
-  "constraints": [
-    "人均100以内",
-    "适合朋友聚餐"
-  ]
+  "strategy": "balanced"
 }
 ```
 
@@ -286,13 +293,25 @@ POST /recommend
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `people` | list | 参与聚会的人，每个人包含姓名和位置 |
+| `participants` | list | 参与聚会的人，每个人包含姓名和地址 |
 | `name` | string | 参与者姓名 |
-| `location` | string | 参与者所在位置，可以是地名、商圈或详细地址 |
-| `target` | string | 目标地点类型，例如火锅、咖啡、烧烤、商场 |
+| `address` | string | 参与者所在位置，可以是地名、商圈或详细地址 |
+| `keywords` | string | 搜索关键词，例如火锅、咖啡、餐厅 |
 | `city` | string | 搜索城市 |
+| `mode` | string | 出行方式，例如 `transit` |
 | `top_k` | int | 返回推荐数量 |
-| `constraints` | list | 额外约束，例如预算、包间、停车、营业时间等 |
+| `strategy` | string | 排序策略，例如 `balanced` |
+
+返回结果重点字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `participants` | 参与者地理编码结果 |
+| `center` / `center_location` | 多人中心点 |
+| `candidate_count` | 候选地点数量 |
+| `places` | 最终推荐地点列表 |
+
+`places` 中每个地点通常包含 `name`、`address`、`location`、`rating`、`routes`、`score`、`total_duration_min`、`max_duration_min`、`fairness_gap_min`、`center_distance_m`。
 
 ### 3. 使用 curl 调用
 
@@ -300,16 +319,16 @@ POST /recommend
 curl -X POST "http://127.0.0.1:8000/recommend" \
   -H "Content-Type: application/json" \
   -d '{
-    "people": [
-      {"name": "我", "location": "苏大本部"},
-      {"name": "小王", "location": "园区湖东邻里中心"},
-      {"name": "小李", "location": "新区狮山路"},
-      {"name": "小张", "location": "吴中区宝带西路"}
+    "participants": [
+      {"name": "我", "address": "苏州大学天赐庄校区"},
+      {"name": "小王", "address": "园区湖东邻里中心"},
+      {"name": "小李", "address": "新区狮山路"}
     ],
-    "target": "火锅",
+    "keywords": "火锅",
     "city": "苏州",
+    "mode": "transit",
     "top_k": 3,
-    "constraints": ["人均100以内", "适合朋友聚餐"]
+    "strategy": "balanced"
   }'
 ```
 
@@ -321,16 +340,16 @@ import requests
 url = "http://127.0.0.1:8000/recommend"
 
 payload = {
-    "people": [
-        {"name": "我", "location": "苏大本部"},
-        {"name": "小王", "location": "园区湖东邻里中心"},
-        {"name": "小李", "location": "新区狮山路"},
-        {"name": "小张", "location": "吴中区宝带西路"},
+    "participants": [
+        {"name": "我", "address": "苏州大学天赐庄校区"},
+        {"name": "小王", "address": "园区湖东邻里中心"},
+        {"name": "小李", "address": "新区狮山路"},
     ],
-    "target": "火锅",
+    "keywords": "火锅",
     "city": "苏州",
+    "mode": "transit",
     "top_k": 3,
-    "constraints": ["人均100以内", "适合朋友聚餐"]
+    "strategy": "balanced",
 }
 
 response = requests.post(url, json=payload)
@@ -341,45 +360,48 @@ print(response.json())
 
 ```json
 {
-  "query": "火锅",
+  "keywords": "火锅",
   "city": "苏州",
+  "participants": [
+    {
+      "name": "我",
+      "address": "苏州大学天赐庄校区",
+      "location": "120.64,31.31"
+    }
+  ],
   "center": {
     "lng": 120.62,
     "lat": 31.30
   },
-  "recommendations": [
+  "center_location": "120.62,31.30",
+  "candidate_count": 20,
+  "places": [
     {
       "rank": 1,
       "name": "示例火锅店",
       "address": "苏州市某某路",
-      "location": {
-        "lng": 120.61,
-        "lat": 31.29
-      },
+      "location": "120.61,31.29",
+      "rating": "4.7",
       "score": 87.5,
-      "avg_duration": 28,
-      "max_duration": 42,
-      "fairness_gap": 18,
+      "total_duration_min": 97,
+      "max_duration_min": 42,
+      "fairness_gap_min": 18,
+      "center_distance_m": 820,
       "routes": [
         {
-          "person": "我",
-          "duration": 25,
-          "distance": 6200
+          "participant": "我",
+          "duration_min": 25,
+          "distance_km": 6.2
         },
         {
-          "person": "小王",
-          "duration": 30,
-          "distance": 8100
+          "participant": "小王",
+          "duration_min": 30,
+          "distance_km": 8.1
         },
         {
-          "person": "小李",
-          "duration": 42,
-          "distance": 12000
-        },
-        {
-          "person": "小张",
-          "duration": 15,
-          "distance": 4300
+          "participant": "小李",
+          "duration_min": 42,
+          "distance_km": 12.0
         }
       ]
     }
@@ -416,6 +438,8 @@ astrbot-gathere/data/plugins/astrbot_plugin_gathere
 ```
 
 然后在 AstrBot WebUI 中重载插件。
+
+当前版本是命令式 AstrBot 插件调用，不是 LLM Tool Calling。后续可升级为自然语言 Agent，由 LLM 抽取 `participants`、`keywords`、`city` 等参数，再调用同一个 `/recommend` 接口。
 
 测试命令：
 
@@ -495,7 +519,7 @@ Gathere: 推荐 3 个相对公平的火锅聚餐地点：
 - 新增 `Gathere Skill` 封装
 - 将地点检索、路线规划、二次排序流程整理为可复用能力
 - 新增 FastAPI 本地接口 `/recommend`
-- 支持通过 HTTP 请求传入多人位置、目标类型和推荐参数
+- 支持通过 HTTP 请求传入 `participants`、`keywords`、`city`、`mode`、`top_k`、`strategy` 等推荐参数
 - 推荐结果以结构化 JSON 返回，便于网页端、QQ Bot 或其他 Agent 调用
 - 项目从本地脚本 Demo 进一步升级为可集成的后端服务模块
 
@@ -506,7 +530,7 @@ Gathere: 推荐 3 个相对公平的火锅聚餐地点：
 - 插件将聊天命令解析为 `/recommend` 接口所需的结构化 JSON
 - Gathere FastAPI 接收请求后，完成地理编码、中心点计算、POI 搜索、路线规划与 `ranker.py` 综合排序
 - 插件读取后端返回的 `places` 字段，并格式化输出 Top 3 推荐结果
-- 当前版本为命令式插件调用，后续可升级为 LLM Tool Calling 和 QQ 群聊入口
+- 当前版本为命令式插件调用，后续可升级为 LLM Tool Calling，由 LLM 抽取 `participants`、`keywords`、`city` 等参数后调用同一个 `/recommend` 接口
 
 
 
