@@ -28,21 +28,24 @@ Gathere 帮你回答这些问题。告诉它每个人在哪，它会：
 
 Gathere 将 LLM Agent、地图工具调用、路线规划和公平性排序结合起来，把“去哪聚会”这个模糊问题拆成了可计算的推荐流程。
 
-项目目前支持四种使用方式：
+项目目前支持五种使用方式：
 
 1. **Streamlit 聊天界面**：适合直接交互和演示
 2. **Gathere Skill**：适合被其他 Agent 或业务逻辑复用
 3. **FastAPI 接口**：适合作为后端服务，被网页端、QQ Bot、插件或其他系统调用
 4. **AstrBot 插件**：适合在 AstrBot Chat 中通过 `/gathere` 命令调用推荐服务
+5. **MCP Server**：让 ZCode、Claude Desktop、Cursor 等任何支持 MCP 的客户端直接调用推荐能力
 
 ## 技术架构
 
 ```text
-用户
+用户 / MCP 客户端
  │
  ├── Streamlit 聊天界面
  │
  ├── Gathere Skill
+ │
+ ├── MCP Server (stdio)
  │
  └── FastAPI /recommend 接口
               │
@@ -51,13 +54,9 @@ Gathere 将 LLM Agent、地图工具调用、路线规划和公平性排序结�
         (LLM, tool use)
               │
      ┌────────┼──────────┬──────────┬──────────┐
-     ▼        ▼          ▼          ▼
-  地理编码   POI 搜索   路线规划   中心点计算
- (高德API)  (高德API)  (高德API)  (本地计算)
-              │
-              ▼
-        综合评分排序
-        (ranker.py)
+     ▼        ▼          ▼          ▼          ▼
+  地理编码   POI 搜索   路线规划   中心点计算  归一化排序
+ (高德API)  (高德API)  (高德API)  (本地计算)  (ranker.py)
               │
               ▼
         Top 3 推荐结果
@@ -69,11 +68,14 @@ Gathere 将 LLM Agent、地图工具调用、路线规划和公平性排序结�
 Gathere/
 ├── app.py                  # Streamlit 聊天界面
 ├── agent.py                # Agent 主逻辑
-├── ranker.py               # 二次排序与公平性评分
+├── ranker.py               # 归一化公平性评分
+├── viz.py                  # 推荐结果地图数据构建
+├── mcp_server.py           # MCP Server 入口
 ├── skills/                 # Gathere Skill 封装
 ├── integrations/           # 外部系统接入示例
 │   └── astrbot_plugin_gathere/
 ├── api.py                  # FastAPI 服务入口
+├── tests/                  # 离线 pytest 测试套件
 ├── requirements.txt        # 项目依赖
 ├── .env.example            # 环境变量示例
 └── README.md
@@ -460,6 +462,60 @@ astrbot-gathere/data/plugins/astrbot_plugin_gathere
 /gathere 我@苏州大学天赐庄校区；小王@园区湖东邻里中心 | 火锅 | 苏州 | 人均100
 ```
 
+## 使用方式五：MCP Server 接入
+
+Gathere 可以作为 MCP（Model Context Protocol）Server 运行，任何支持 MCP 的客户端（ZCode、Claude Desktop、Cursor 等）都能直接调用聚会地点推荐能力，不需要自建 FastAPI 服务。
+
+高德官方自己也提供 MCP Server（原子级地图工具：单次搜索、单次算路等）。Gathere MCP 是在地图数据能力之上的垂直封装：一个工具完成"多人选址"，内部自动处理地理编码、几何中位数中心点、多中心候选搜索、路线规划和归一化公平性排序。
+
+### 1. 在 MCP 客户端中配置
+
+stdio 方式（推荐，客户端自动拉起进程）：
+
+```json
+{
+  "mcpServers": {
+    "gathere": {
+      "command": "python",
+      "args": ["/你的路径/Gathere/mcp_server.py"]
+    }
+  }
+}
+```
+
+`AMAP_API_KEY` 会从 Gathere 目录下的 `.env` 自动读取；如果客户端工作目录不同，也可以直接在配置的 `env` 字段里给出：
+
+```json
+{
+  "mcpServers": {
+    "gathere": {
+      "command": "python",
+      "args": ["/你的路径/Gathere/mcp_server.py"],
+      "env": { "AMAP_API_KEY": "your_amap_api_key_here" }
+    }
+  }
+}
+```
+
+### 2. 提供的工具
+
+| 工具 | 说明 |
+| --- | --- |
+| `recommend_meeting_places` | 核心工具：输入参与者列表（每人 `name`/`address`，可选自己的 `mode` 出行方式），支持 `keywords`、`city`、`max_cost` 人均预算、`strategy` 排序策略，返回 Top_k 推荐与每人通勤明细 |
+| `geocode_address` | 地址/地名 → 高德经纬度坐标 |
+| `plan_route` | 两点路线耗时与距离，起终点支持坐标或地名（地名自动地理编码） |
+
+### 3. 调用示例
+
+在支持 MCP 的客户端对话里直接说：
+
+```text
+帮我找个人人通勤都合理的火锅店：我在苏州大学天赐庄校区，
+小王在园区湖东邻里中心（他开车），小李在新区狮山路，人均100以内。
+```
+
+客户端会自动调用 `recommend_meeting_places` 并汇总结果。
+
 ## 推荐排序逻辑
 
 Gathere 的排序不是只看中心点距离，而是通过 `ranker.py` 对候选 POI 进行二次评分。
@@ -569,6 +625,13 @@ Gathere: 推荐 3 个相对公平的火锅聚餐地点：
 - **AstrBot 插件增强**：命令新增第四段可选参数，支持指定出行方式或人均预算，通勤明细展示每人出行方式
 - 修复 `requirements.txt` 缺少 `fastapi`/`uvicorn`/`httpx` 导致按文档安装后无法启动 FastAPI 的问题；`DEFAULT_CITY` 接入所有默认参数
 - 测试套件扩充至 33 个用例，新增 FastAPI 参数透传与鉴权、预算过滤、混合出行方式、地图数据构建的测试
+
+### v1.3：MCP Server 接入
+
+- 新增 `mcp_server.py`，基于 MCP 官方 Python SDK 将 Gathere 封装为 MCP Server，stdio 传输
+- 暴露三个业务粒度工具：`recommend_meeting_places`（多人聚会选址）、`geocode_address`（地理编码）、`plan_route`（路线规划，地名自动解析为坐标）
+- ZCode、Claude Desktop、Cursor 等 MCP 客户端即插即用，无需自建服务；`AMAP_API_KEY` 从 `.env` 或客户端配置的 `env` 读取，不内置任何 Key
+- 测试覆盖 stdio 协议握手、工具列表、参数透传，以及（配置真实 Key 时）端到端地理编码调用，套件共 39 个用例
 
 
 
