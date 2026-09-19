@@ -3,9 +3,11 @@ Gathere - Streamlit UI.
 Chat interface for multi-person meeting-place recommendations.
 """
 
+import pandas as pd
 import streamlit as st
 
 from agent import chat
+from viz import build_map_points, extract_last_recommendation
 
 
 st.set_page_config(
@@ -21,6 +23,8 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "history" not in st.session_state:
     st.session_state.history = []
+if "last_result" not in st.session_state:
+    st.session_state.last_result = None
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -39,6 +43,7 @@ if prompt := st.chat_input("比如：我们三个人想聚餐，我在苏大本�
                     st.session_state.history if st.session_state.history else None,
                 )
                 st.session_state.history = updated_history
+                st.session_state.last_result = extract_last_recommendation(updated_history)
                 st.markdown(response_text)
                 st.session_state.messages.append({
                     "role": "assistant",
@@ -52,6 +57,16 @@ if prompt := st.chat_input("比如：我们三个人想聚餐，我在苏大本�
                     "content": error_msg,
                 })
 
+if st.session_state.last_result:
+    points = build_map_points(st.session_state.last_result)
+    if points:
+        st.subheader("🗺️ 位置示意图")
+        st.map(pd.DataFrame(points))
+        st.caption(
+            "蓝色 = 参与者，橙色 = 中心点，红色 = 推荐地点。"
+            "坐标为高德 GCJ-02，渲染可能有数百米偏移，仅供示意。"
+        )
+
 with st.sidebar:
     st.markdown("### 使用说明")
     st.markdown("""
@@ -63,6 +78,7 @@ with st.sidebar:
     - "要有包间"
     - "想吃火锅"
     - "人均别超过100"
+    - "小王开车来"
     - "改成KTV"
     """)
 
@@ -71,7 +87,8 @@ with st.sidebar:
     if st.button("🗑️ 清空对话"):
         st.session_state.messages = []
         st.session_state.history = []
+        st.session_state.last_result = None
         st.rerun()
 
     st.markdown("---")
-    st.caption("Gathere v0.3 | LLM + 高德地图 API")
+    st.caption("Gathere v1.2 | LLM + 高德地图 API")

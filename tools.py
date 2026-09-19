@@ -4,10 +4,22 @@ Provides geocoding, POI search, route planning, centroid calculation, and
 multi-person place recommendation.
 """
 
+import math
+import re
+
 import requests
 
-from config import AMAP_API_KEY
+from config import AMAP_API_KEY, DEFAULT_CITY
 from ranker import rank_candidates
+
+# Candidate search: pool results from the centroid and participant locations,
+# then route-plan only the most promising ones to save API quota.
+MAX_SEARCH_CENTERS = 5
+MIN_CANDIDATES = 3
+MAX_SEARCH_RADIUS = 10000
+ROUTE_CANDIDATE_LIMIT = 10
+
+VALID_MODES = ("driving", "walking", "transit")
 
 
 def _safe_float(value, default=0.0):
@@ -17,6 +29,14 @@ def _safe_float(value, default=0.0):
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _parse_cost(value) -> float | None:
+    """AMap cost strings can be '78' or a range like '78-98'; take the low end."""
+    if value in ("", None, []):
+        return None
+    match = re.search(r"\d+(?:\.\d+)?", str(value))
+    return float(match.group()) if match else None
 
 
 def _looks_like_coord(value: str) -> bool:
@@ -32,6 +52,25 @@ def _looks_like_coord(value: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _parse_lng_lat(location: str) -> tuple[float, float] | None:
+    if not isinstance(location, str) or "," not in location:
+        return None
+
+    try:
+        lng, lat = location.split(",", 1)
+        return float(lng), float(lat)
+    except ValueError:
+        return None
+
+
+def _haversine_km(lng1: float, lat1: float, lng2: float, lat2: float) -> float:
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = phi2 - phi1
+    dlmb = math.radians(lng2 - lng1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlmb / 2) ** 2
+    return 2 * 6371.0 * math.asin(math.sqrt(a))
 
 
 def _normalize_route_result(route_result: dict) -> dict:
@@ -150,6 +189,7 @@ def search_nearby_pois(
             "tel": business.get("tel", ""),
             "type": poi.get("type", ""),
             "rating": _safe_float(business.get("rating"), default=0.0),
+            "cost": _parse_cost(business.get("cost")),
         })
 
     return {
@@ -162,7 +202,7 @@ def route_plan(
     origin: str,
     destination: str,
     mode: str = "transit",
-    city: str = "苏州",
+    city: str = DEFAULT_CITY,
 ) -> dict:
     """Calculate route distance and duration between two coordinates."""
 
@@ -231,34 +271,178 @@ def route_plan(
 
 
 def compute_centroid(locations: list[str]) -> dict:
-    """Calculate the geographic centroid of multiple coordinates."""
+    """Calculate the geometric median of multiple coordinates (Weiszfeld).
+
+    Unlike the arithmetic mean, the geometric median resists outliers: one
+    participant far across the city only pulls the center slightly instead of
+    dragging it halfway.
+    """
 
     if not locations:
         return {"error": "缺少坐标列表"}
 
-    lngs = []
-    lats = []
+    pts = []
+    for loc in locations:
+        parsed = _parse_lng_lat(loc)
+        if parsed is None:
+            return {"error": f"坐标格式错误: {loc}"}
+        pts.append(parsed)
 
-    try:
-        for loc in locations:
-            parts = loc.split(",")
-            if len(parts) != 2:
-                return {"error": f"坐标格式错误: {loc}"}
+    if len(pts) == 1:
+        lng, lat = pts[0]
+        return {
+            "location": f"{lng:.6f},{lat:.6f}",
+            "lng": round(lng, 6),
+            "lat": round(lat, 6),
+        }
 
-            lngs.append(float(parts[0]))
-            lats.append(float(parts[1]))
+    # Work in a local kilometer frame so one degree of longitude and one
+    # degree of latitude carry comparable metric weight.
+    mean_lat = sum(lat for _, lat in pts) / len(pts)
+    km_per_lng = 111.320 * math.cos(math.radians(mean_lat))
+    km_per_lat = 110.574
+    km_pts = [(lng * km_per_lng, lat * km_per_lat) for lng, lat in pts]
 
-        avg_lng = sum(lngs) / len(lngs)
-        avg_lat = sum(lats) / len(lats)
+    x = sum(p[0] for p in km_pts) / len(km_pts)
+    y = sum(p[1] for p in km_pts) / len(km_pts)
 
-    except Exception as exc:
-        return {"error": f"中心点计算失败: {str(exc)}"}
+    for _ in range(100):
+        num_x = num_y = den = 0.0
+        for px, py in km_pts:
+            dist = max(math.hypot(px - x, py - y), 1e-6)
+            weight = 1.0 / dist
+            num_x += px * weight
+            num_y += py * weight
+            den += weight
+
+        new_x, new_y = num_x / den, num_y / den
+        moved = math.hypot(new_x - x, new_y - y)
+        x, y = new_x, new_y
+        if moved < 1e-9:
+            break
+
+    lng = x / km_per_lng
+    lat = y / km_per_lat
 
     return {
-        "location": f"{avg_lng:.6f},{avg_lat:.6f}",
-        "lng": round(avg_lng, 6),
-        "lat": round(avg_lat, 6),
+        "location": f"{lng:.6f},{lat:.6f}",
+        "lng": round(lng, 6),
+        "lat": round(lat, 6),
+        "method": "geometric_median",
     }
+
+
+def _merge_pois(poi_lists: list[list[dict]], center_location: str) -> list[dict]:
+    """Deduplicate POIs pooled from several search centers.
+
+    Each POI's distance is recomputed from the main centroid so the
+    center_distance factor stays consistent regardless of which center found
+    the POI.
+    """
+
+    center = _parse_lng_lat(center_location)
+    merged: dict[str, dict] = {}
+
+    for pois in poi_lists:
+        for poi in pois:
+            location = poi.get("location")
+            if _parse_lng_lat(location) is None:
+                continue
+
+            key = location
+            if key in merged:
+                continue
+
+            poi = dict(poi)
+            if center is not None:
+                lng, lat = _parse_lng_lat(location)
+                poi["distance"] = round(
+                    _haversine_km(lng, lat, center[0], center[1]) * 1000,
+                    1,
+                )
+            merged[key] = poi
+
+    return list(merged.values())
+
+
+def _collect_candidates(
+    center_location: str,
+    participant_locations: list[str],
+    keywords: str,
+    radius: int,
+    page_size: int,
+) -> tuple[list[dict], list[str]]:
+    """Search POIs around the centroid and participant locations, then merge.
+
+    Pooling from participant locations keeps the candidate list useful when
+    the centroid itself falls in an empty area (lake, hill, outskirts). If
+    pooling still yields too few candidates, retry once with a larger radius.
+    """
+
+    centers = [center_location]
+    for loc in participant_locations:
+        if len(centers) >= MAX_SEARCH_CENTERS:
+            break
+        if loc not in centers:
+            centers.append(loc)
+
+    errors: list[str] = []
+
+    def search_all(search_radius: int) -> list[list[dict]]:
+        poi_lists = []
+        for center in centers:
+            result = search_nearby_pois(
+                location=center,
+                keywords=keywords,
+                radius=search_radius,
+                page_size=page_size,
+            )
+            if result.get("error"):
+                errors.append(result["error"])
+                continue
+            poi_lists.append(result.get("pois", []))
+        return poi_lists
+
+    merged = _merge_pois(search_all(radius), center_location)
+
+    if len(merged) < MIN_CANDIDATES and radius < MAX_SEARCH_RADIUS:
+        merged = _merge_pois(
+            search_all(min(radius * 2, MAX_SEARCH_RADIUS)),
+            center_location,
+        )
+
+    return merged, errors
+
+
+def _straight_line_total_km(poi_location: str, participant_locations: list[str]) -> float:
+    poi = _parse_lng_lat(poi_location)
+    if poi is None:
+        return float("inf")
+
+    total = 0.0
+    for loc in participant_locations:
+        person = _parse_lng_lat(loc)
+        if person is None:
+            continue
+        total += _haversine_km(poi[0], poi[1], person[0], person[1])
+    return total
+
+
+def _coarse_filter(
+    candidates: list[dict],
+    participant_locations: list[str],
+    limit: int = ROUTE_CANDIDATE_LIMIT,
+) -> tuple[list[dict], int]:
+    """Keep the most promising candidates before paying for real route plans."""
+
+    if len(candidates) <= limit:
+        return candidates, 0
+
+    ranked = sorted(
+        candidates,
+        key=lambda p: _straight_line_total_km(p.get("location", ""), participant_locations),
+    )
+    return ranked[:limit], len(candidates) - limit
 
 
 def recommend_places(
@@ -268,14 +452,16 @@ def recommend_places(
     page_size: int = 15,
     top_k: int = 3,
     mode: str = "transit",
-    city: str = "苏州",
+    city: str = DEFAULT_CITY,
     strategy: str = "balanced",
+    max_cost: float | None = None,
 ) -> dict:
     """
     Recommend top meeting places from multiple participant locations.
 
-    Internally calls geocode, compute_centroid, search_nearby_pois,
-    route_plan, and rank_candidates.
+    Internally calls geocode, compute_centroid (geometric median),
+    _collect_candidates (multi-center POI pooling), route_plan, and
+    rank_candidates (normalized scoring).
     """
 
     if not participants:
@@ -290,11 +476,21 @@ def recommend_places(
         if not address:
             return {"error": f"{name} 缺少出发位置"}
 
+        # Each participant may travel by their own mode; fall back to the
+        # global one (e.g. someone drives while the rest take the metro).
+        person_mode = person.get("mode") or mode
+        if person_mode not in VALID_MODES:
+            return {
+                "error": f"{name} 的出行方式无效: {person_mode}，"
+                         f"请选择 driving/walking/transit",
+            }
+
         if _looks_like_coord(address):
             geocoded_participants.append({
                 "name": name,
                 "address": address,
                 "location": address,
+                "mode": person_mode,
                 "geo": {
                     "name": address,
                     "location": address,
@@ -326,6 +522,7 @@ def recommend_places(
             "name": name,
             "address": address,
             "location": location,
+            "mode": person_mode,
             "geo": geo_result,
         })
 
@@ -341,27 +538,50 @@ def recommend_places(
             "raw": centroid_result,
         }
 
-    poi_result = search_nearby_pois(
-        location=center_location,
+    poi_candidates, search_errors = _collect_candidates(
+        center_location=center_location,
+        participant_locations=locations,
         keywords=keywords,
         radius=radius,
         page_size=page_size,
     )
-    if poi_result.get("error"):
-        return {"error": poi_result.get("error")}
 
-    pois = poi_result.get("pois", [])
-    if not pois:
+    # Budget filter uses AMap's per-person cost when the POI reports one;
+    # POIs without cost data are kept rather than punished.
+    budget_filtered_count = 0
+    if max_cost is not None and poi_candidates:
+        affordable = []
+        for poi in poi_candidates:
+            cost = poi.get("cost")
+            if cost is not None and cost > max_cost:
+                budget_filtered_count += 1
+            else:
+                affordable.append(poi)
+        poi_candidates = affordable
+
+    if not poi_candidates:
+        if budget_filtered_count:
+            error = f"所有候选地点的人均消费都超过预算 {max_cost:g} 元"
+        else:
+            error = search_errors[0] if search_errors else "没有搜索到合适的候选地点"
         return {
-            "error": "没有搜索到合适的候选地点",
+            "error": error,
             "center_location": center_location,
             "keywords": keywords,
+            "max_cost": max_cost,
         }
+
+    coarse_candidates, filtered_count = _coarse_filter(poi_candidates, locations)
+
+    n_people = len(geocoded_participants)
+    # A candidate stays usable as long as at least half of the participants
+    # (and at least one) got a real route; ranker penalizes the missing ones.
+    min_usable_routes = max(1, math.ceil(n_people / 2))
 
     candidates = []
     skipped_candidates = []
 
-    for poi in pois:
+    for poi in coarse_candidates:
         poi_location = poi.get("location")
         if not poi_location:
             skipped_candidates.append({
@@ -371,33 +591,30 @@ def recommend_places(
             continue
 
         routes = []
-        has_route_error = False
-
         for person in geocoded_participants:
             route_result = route_plan(
                 origin=person["location"],
                 destination=poi_location,
-                mode=mode,
+                mode=person["mode"],
                 city=city,
             )
             normalized_route = _normalize_route_result(route_result)
 
-            if normalized_route.get("duration_min") is None:
-                has_route_error = True
-
             routes.append({
                 "participant": person["name"],
                 "origin_address": person["address"],
+                "mode": person["mode"],
                 "duration_min": normalized_route.get("duration_min"),
                 "distance_km": normalized_route.get("distance_km"),
                 "error": normalized_route.get("error"),
                 "raw": normalized_route.get("raw"),
             })
 
-        if has_route_error:
+        usable_count = sum(1 for r in routes if r.get("duration_min") is not None)
+        if usable_count < min_usable_routes:
             skipped_candidates.append({
                 "name": poi.get("name", ""),
-                "reason": "部分参与者路线规划失败",
+                "reason": f"可用路线不足（{usable_count}/{n_people}）",
                 "routes": routes,
             })
             continue
@@ -429,7 +646,10 @@ def recommend_places(
         "mode": mode,
         "city": city,
         "strategy": strategy,
+        "max_cost": max_cost,
+        "budget_filtered_count": budget_filtered_count,
         "candidate_count": len(candidates),
+        "filtered_count": filtered_count,
         "skipped_count": len(skipped_candidates),
         "count": len(ranked_places),
         "places": ranked_places,
@@ -557,6 +777,11 @@ TOOL_DEFINITIONS = [
                                     "type": "string",
                                     "description": "参与者出发位置，例如苏州大学独墅湖校区",
                                 },
+                                "mode": {
+                                    "type": "string",
+                                    "description": "该参与者自己的出行方式，不填则使用全局 mode。例如有人开车、其他人坐地铁",
+                                    "enum": ["driving", "walking", "transit"],
+                                },
                             },
                             "required": ["name", "address"],
                         },
@@ -597,6 +822,10 @@ TOOL_DEFINITIONS = [
                         "description": "推荐策略，balanced 表示综合平衡，fair 表示更重视公平，fast 表示更重视总通勤时间",
                         "enum": ["balanced", "fair", "fast"],
                         "default": "balanced",
+                    },
+                    "max_cost": {
+                        "type": "number",
+                        "description": "人均消费预算上限（元）。用户提到“人均100以内”“预算50”等约束时使用，无预算则不传",
                     },
                 },
                 "required": ["participants"],

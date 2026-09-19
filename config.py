@@ -39,5 +39,10 @@ LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
 # 申请地址: https://console.amap.com/dev/key/app
 AMAP_API_KEY = os.getenv("AMAP_API_KEY", "")
 
+# FastAPI 接口鉴权 Key（可选）
+# 设置后，调用 /recommend 必须携带请求头 X-API-Key: <此 Key>
+# 留空表示不鉴权（仅建议本机开发时使用）
+GATHERE_API_KEY = os.getenv("GATHERE_API_KEY", "")
+
 # 默认城市
 DEFAULT_CITY = "苏州"
