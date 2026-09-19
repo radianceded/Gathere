@@ -10,6 +10,17 @@ from astrbot.api.star import Context, Star
 
 GATHERE_API_URL = "http://127.0.0.1:8000/recommend"
 
+MODE_KEYWORDS = {
+    "公交": "transit",
+    "地铁": "transit",
+    "驾车": "driving",
+    "开车": "driving",
+    "自驾": "driving",
+    "步行": "walking",
+}
+
+MODE_LABELS = {"transit": "公交", "driving": "驾车", "walking": "步行"}
+
 
 class GatherePlugin(Star):
     def __init__(self, context: Context):
@@ -60,7 +71,10 @@ class GatherePlugin(Star):
     def _parse_query(self, query: str) -> dict[str, Any]:
         """
         输入格式：
-        /gathere 我@苏州大学天赐庄校区；小王@园区湖东邻里中心；小李@新区狮山路 | 火锅 | 苏州
+        /gathere 我@苏州大学天赐庄校区；小王@园区湖东邻里中心；小李@新区狮山路 | 火锅 | 苏州 | 驾车
+        /gathere 我@苏州大学天赐庄校区；小王@园区湖东邻里中心 | 火锅 | 苏州 | 人均100
+
+        第四段为可选附加参数，可以是出行方式（公交/驾车/步行）或人均预算（人均100）。
 
         转换为 Gathere /recommend 接口格式：
         {
@@ -72,7 +86,8 @@ class GatherePlugin(Star):
             "city": "苏州",
             "mode": "transit",
             "top_k": 3,
-            "strategy": "balanced"
+            "strategy": "balanced",
+            "max_cost": 100
         }
         """
         parts = [p.strip() for p in query.split("|")]
@@ -83,6 +98,21 @@ class GatherePlugin(Star):
         people_text = parts[0]
         keywords = parts[1]
         city = parts[2] if len(parts) >= 3 and parts[2] else "苏州"
+        extra = parts[3] if len(parts) >= 4 and parts[3] else ""
+
+        mode = "transit"
+        max_cost = None
+
+        if extra:
+            budget_match = re.search(r"(?:人均|预算)\s*(\d+)", extra)
+            if budget_match:
+                max_cost = float(budget_match.group(1))
+            elif extra in MODE_KEYWORDS:
+                mode = MODE_KEYWORDS[extra]
+            else:
+                raise ValueError(
+                    f"无法识别的附加参数“{extra}”，可用：公交/驾车/步行 或 人均100"
+                )
 
         raw_people = [
             p.strip()
@@ -118,9 +148,10 @@ class GatherePlugin(Star):
             "participants": participants,
             "keywords": keywords,
             "city": city,
-            "mode": "transit",
+            "mode": mode,
             "top_k": 3,
             "strategy": "balanced",
+            "max_cost": max_cost,
         }
 
     async def _call_gathere(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -189,7 +220,11 @@ class GatherePlugin(Star):
                     participant = route.get("participant", "未知参与者")
                     duration = route.get("duration_min", "未知")
                     distance = route.get("distance_km", "未知")
-                    lines.append(f"- {participant}：{duration} 分钟，约 {distance} km")
+                    mode_label = MODE_LABELS.get(route.get("mode"), "")
+                    mode_text = f"（{mode_label}）" if mode_label else ""
+                    lines.append(
+                        f"- {participant}{mode_text}：{duration} 分钟，约 {distance} km"
+                    )
 
             lines.append("")
 
@@ -198,9 +233,12 @@ class GatherePlugin(Star):
     def _help_text(self) -> str:
         return (
             "用法：\n"
-            "/gathere 人名@位置；人名@位置 | 关键词 | 城市\n\n"
+            "/gathere 人名@位置；人名@位置 | 关键词 | 城市 | 附加参数\n\n"
             "示例：\n"
-            "/gathere 我@苏州大学天赐庄校区；小王@园区湖东邻里中心；小李@新区狮山路 | 火锅 | 苏州\n\n"
+            "/gathere 我@苏州大学天赐庄校区；小王@园区湖东邻里中心；小李@新区狮山路 | 火锅 | 苏州\n"
+            "/gathere 我@苏州大学天赐庄校区；小王@园区湖东邻里中心 | 火锅 | 苏州 | 驾车\n"
+            "/gathere 我@苏州大学天赐庄校区；小王@园区湖东邻里中心 | 火锅 | 苏州 | 人均100\n\n"
+            "附加参数可选：公交/驾车/步行（出行方式）或 人均100（预算上限）\n\n"
             "不写姓名也可以：\n"
             "/gathere 苏州大学天赐庄校区；园区湖东邻里中心；新区狮山路 | 咖啡 | 苏州"
         )

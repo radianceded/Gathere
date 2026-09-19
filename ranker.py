@@ -1,4 +1,24 @@
-"""Ranking utilities for Gathere place recommendations."""
+"""Ranking utilities for Gathere place recommendations.
+
+All factors (total travel time, worst single trip, fairness gap, distance to
+the center, POI rating) are min-max normalized within the current candidate
+set before weighting, so metrics with different units contribute on a
+comparable 0-1 scale. A lower score is better.
+"""
+
+WEIGHTS = {
+    "balanced": {"total": 0.40, "max": 0.25, "fairness": 0.20, "center": 0.10, "rating": 0.05},
+    "fair": {"total": 0.25, "max": 0.30, "fairness": 0.30, "center": 0.10, "rating": 0.05},
+    "fast": {"total": 0.55, "max": 0.25, "fairness": 0.10, "center": 0.05, "rating": 0.05},
+}
+
+# Extra score per candidate, scaled by the ratio of participants whose route
+# could not be planned. Prevents candidates with only 2 of 4 usable routes
+# from looking artificially good.
+INCOMPLETE_DATA_PENALTY = 0.10
+
+# Neutral normalized value used for missing data (e.g. a POI without rating).
+NEUTRAL_SCORE = 0.5
 
 
 def _safe_float(value, default=0.0):
@@ -23,61 +43,100 @@ def _duration_values(routes: list[dict]) -> list[float]:
     return durations
 
 
+def _rating_value(candidate: dict) -> float | None:
+    """AMap returns an empty rating when a POI has none; treat 0 as missing too."""
+    rating = candidate.get("rating")
+    if rating in ("", None, [], 0, "0"):
+        return None
+    value = _safe_float(rating, default=None)
+    return value if value and value > 0 else None
+
+
+def _minmax(values: list[float | None]) -> list[float]:
+    """Scale raw values into [0, 1]; missing values get the neutral score."""
+    known = [v for v in values if v is not None]
+    if not known:
+        return [NEUTRAL_SCORE] * len(values)
+
+    lo, hi = min(known), max(known)
+    if hi - lo < 1e-9:
+        return [NEUTRAL_SCORE] * len(values)
+
+    span = hi - lo
+    return [NEUTRAL_SCORE if v is None else (v - lo) / span for v in values]
+
+
 def _strategy_weights(strategy: str) -> dict[str, float]:
-    weights = {
-        "balanced": {
-            "total": 0.45,
-            "max": 0.30,
-            "fairness": 0.20,
-            "center_distance": 1.00,
-            "rating": 2.00,
-        },
-        "fair": {
-            "total": 0.35,
-            "max": 0.35,
-            "fairness": 0.25,
-            "center_distance": 1.00,
-            "rating": 2.00,
-        },
-        "fast": {
-            "total": 0.60,
-            "max": 0.25,
-            "fairness": 0.10,
-            "center_distance": 1.00,
-            "rating": 2.00,
-        },
-    }
-    return weights.get(strategy, weights["balanced"])
+    return WEIGHTS.get(strategy, WEIGHTS["balanced"])
 
 
-def calculate_score(candidate: dict, strategy: str = "balanced") -> float:
-    routes = candidate.get("routes", [])
-    durations = _duration_values(routes)
+def score_candidates(candidates: list[dict], strategy: str = "balanced") -> list[dict]:
+    """Attach a normalized score and score_breakdown to every candidate."""
+    if not candidates:
+        return []
 
-    if not durations:
-        return float("inf")
+    totals, maxes, gaps, centers, ratings = [], [], [], [], []
+    for candidate in candidates:
+        durations = _duration_values(candidate.get("routes", []))
+        totals.append(sum(durations))
+        maxes.append(max(durations))
+        gaps.append(max(durations) - min(durations))
+        centers.append(_safe_float(candidate.get("distance"), 0.0))
+        ratings.append(_rating_value(candidate))
 
-    total_duration = sum(durations)
-    max_duration = max(durations)
-    min_duration = min(durations)
-    fairness_gap = max_duration - min_duration
-
-    # AMap POI distance is the distance from the search center, usually meters.
-    center_distance_m = _safe_float(candidate.get("distance"), 0.0)
-    center_distance_km = center_distance_m / 1000
-
-    rating = _safe_float(candidate.get("rating"), 0.0)
     weights = _strategy_weights(strategy)
+    norm_totals = _minmax(totals)
+    norm_maxes = _minmax(maxes)
+    norm_gaps = _minmax(gaps)
+    norm_centers = _minmax([c / 1000 for c in centers])
+    norm_ratings = _minmax(ratings)
 
-    score = (
-        total_duration * weights["total"]
-        + max_duration * weights["max"]
-        + fairness_gap * weights["fairness"]
-        + center_distance_km * weights["center_distance"]
-        - rating * weights["rating"]
-    )
+    scored = []
+    for idx, candidate in enumerate(candidates):
+        routes = candidate.get("routes", [])
+        missing_ratio = (
+            sum(1 for r in routes if r.get("duration_min") is None) / len(routes)
+            if routes
+            else 0.0
+        )
 
-    return round(score, 2)
+        breakdown = {
+            "total": norm_totals[idx] * weights["total"],
+            "max": norm_maxes[idx] * weights["max"],
+            "fairness": norm_gaps[idx] * weights["fairness"],
+            "center_distance": norm_centers[idx] * weights["center"],
+            "rating": norm_ratings[idx] * weights["rating"],
+            "incomplete_data": INCOMPLETE_DATA_PENALTY * missing_ratio,
+        }
+        score = round(
+            breakdown["total"]
+            + breakdown["max"]
+            + breakdown["fairness"]
+            + breakdown["center_distance"]
+            - breakdown["rating"]
+            + breakdown["incomplete_data"],
+            4,
+        )
+
+        durations = _duration_values(routes)
+        enriched = dict(candidate)
+        enriched.update({
+            "score": score,
+            "total_duration_min": round(sum(durations), 1),
+            "max_duration_min": round(max(durations), 1),
+            "min_duration_min": round(min(durations), 1),
+            "fairness_gap_min": round(max(durations) - min(durations), 1),
+            "center_distance_m": centers[idx],
+            "rating": _safe_float(ratings[idx], 0.0),
+            "score_breakdown": {k: round(v, 4) for k, v in breakdown.items()},
+            # legacy aliases kept for older callers
+            "total_duration": round(sum(durations), 1),
+            "max_duration": round(max(durations), 1),
+            "fairness_gap": round(max(durations) - min(durations), 1),
+        })
+        scored.append(enriched)
+
+    return scored
 
 
 def rank_candidates(
@@ -85,38 +144,7 @@ def rank_candidates(
     top_k: int = 3,
     strategy: str = "balanced",
 ) -> list[dict]:
-    ranked = []
-
-    for candidate in candidates:
-        routes = candidate.get("routes", [])
-        durations = _duration_values(routes)
-
-        if not durations:
-            continue
-
-        score = calculate_score(candidate, strategy=strategy)
-        total_duration = round(sum(durations), 1)
-        max_duration = round(max(durations), 1)
-        min_duration = round(min(durations), 1)
-        fairness_gap = round(max_duration - min_duration, 1)
-        center_distance_m = _safe_float(candidate.get("distance"), 0.0)
-        rating = _safe_float(candidate.get("rating"), 0.0)
-
-        enriched_candidate = dict(candidate)
-        enriched_candidate.update({
-            "score": score,
-            "total_duration_min": total_duration,
-            "max_duration_min": max_duration,
-            "min_duration_min": min_duration,
-            "fairness_gap_min": fairness_gap,
-            "total_duration": total_duration,
-            "max_duration": max_duration,
-            "fairness_gap": fairness_gap,
-            "center_distance_m": center_distance_m,
-            "rating": rating,
-        })
-
-        ranked.append(enriched_candidate)
-
-    ranked.sort(key=lambda x: x["score"])
-    return ranked[:top_k]
+    usable = [c for c in candidates if _duration_values(c.get("routes", []))]
+    scored = score_candidates(usable, strategy=strategy)
+    scored.sort(key=lambda x: (x["score"], x["total_duration_min"]))
+    return scored[:top_k]

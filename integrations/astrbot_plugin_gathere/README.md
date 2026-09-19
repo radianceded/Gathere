@@ -32,13 +32,20 @@ astrbot-gathere/data/plugins/astrbot_plugin_gathere
 ## 命令格式
 
 ```text
-/gathere 人名@位置；人名@位置 | 关键词 | 城市
+/gathere 人名@位置；人名@位置 | 关键词 | 城市 | 附加参数
 ```
+
+第四段附加参数可选，支持两种写法：
+
+- 出行方式：`公交` / `驾车` / `步行`
+- 人均预算：`人均100` 或 `预算100`
 
 示例：
 
 ```text
 /gathere 我@苏州大学天赐庄校区；小王@园区湖东邻里中心；小李@新区狮山路 | 火锅 | 苏州
+/gathere 我@苏州大学天赐庄校区；小王@园区湖东邻里中心 | 火锅 | 苏州 | 驾车
+/gathere 我@苏州大学天赐庄校区；小王@园区湖东邻里中心 | 火锅 | 苏州 | 人均100
 ```
 
 插件会解析为：
@@ -53,19 +60,18 @@ astrbot-gathere/data/plugins/astrbot_plugin_gathere
     {
       "name": "小王",
       "address": "园区湖东邻里中心"
-    },
-    {
-      "name": "小李",
-      "address": "新区狮山路"
     }
   ],
   "keywords": "火锅",
   "city": "苏州",
   "mode": "transit",
   "top_k": 3,
-  "strategy": "balanced"
+  "strategy": "balanced",
+  "max_cost": 100
 }
 ```
+
+如果 Gathere 服务端在 `.env` 中配置了 `GATHERE_API_KEY`，请修改插件中的 `_call_gathere`，在请求头中携带 `X-API-Key`。
 
 ## 当前版本说明
 
